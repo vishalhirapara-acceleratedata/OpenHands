@@ -69,16 +69,19 @@ sub-agent LocalConversation  (forked openhands/tools/task/manager.py)
         forward via a "sub-event sink" supplied by the agent-server
           └─ sink: publish to the PARENT EventService._pub_sub directly
                    (NOT appended to parent state.events)   [publish-not-persist]
-                └─ existing WebhookSubscriber → POST {base_url}/events/{parent_id}
-                      └─ app-server on_event → save_event   (event carries parent_tool_use_id)
-                            └─ existing /events/search + live WebSocket
+                └─ WebhookSubscriber → POST to app-server
+                      └─ app-server on_event: events with parent_tool_use_id set
+                         are persisted into a SEPARATE sub-directory keyed by the
+                         sub-conversation id (NOT the parent's flat events dir)
+                            └─ live WebSocket (tagged) + read endpoint over the sub-dir
                                   └─ frontend nests events under the Sub-agent
                                      task card whose tool_call_id matches
 ```
 
 Correlation key: the **`tool_call_id` of the `TaskAction`** (stable, already
 present on the action and its paired observation), mirroring Anthropic's
-`parent_tool_use_id`.
+`parent_tool_use_id`. The correlation tag is for transport + frontend nesting
+only — it does **not** imply flat on-disk co-location (see §5.6 / §7).
 
 ## 5. Components & changes
 
@@ -121,8 +124,22 @@ frontend types with no further wiring on the transport.
   available to the `TaskManager`.
 
 ### 5.4 app-server (in repo) — `openhands/app_server`
-- No structural change: `event_callback/webhook_router.py:on_event` already
-  persists whatever events arrive; they now simply carry `parent_tool_use_id`.
+- **Directory structure is NOT changed** (hard constraint, see §5.6 / §7).
+  Sub-agent events must continue to live under their **own separate directory**,
+  exactly as today — they must **not** be flattened into the parent
+  conversation's flat events directory.
+- `event_callback/webhook_router.py:on_event` routes by the event's
+  `parent_tool_use_id`:
+  - `None` → persist into the parent conversation's existing events store
+    (unchanged).
+  - non-null → persist into a **separate sub-directory keyed by the
+    sub-conversation id**, mirroring the agent-server layout
+    (`v1_conversations/<parent_id>/subagents/<sub_conversation_id>/events/`).
+    This requires the forwarded event to carry its own (sub) `conversation_id`
+    alongside `parent_tool_use_id`.
+- Expose the sub-stream via a read endpoint over that separate directory, e.g.
+  `GET /conversation/{parent_id}/subagents/{tool_call_id}/events` (history);
+  live events still flow over the existing WebSocket, tagged.
 - Guard: skip sub-agent events (those with a non-null `parent_tool_use_id`) in
   analytics paths that scan events — stats processing and terminal-state
   detection in `on_event` — so sub-agent activity does not skew conversation
@@ -137,7 +154,22 @@ frontend types with no further wiring on the transport.
   existing `SubagentObservationContent` / "Sub-agent task" card whose
   `tool_call_id` matches.
 - Live behavior: as sub-agent events arrive over the WebSocket, append them into
-  the matching open card.
+  the matching open card. Historical loads read from the sub-stream endpoint
+  (§5.4).
+
+### 5.6 Directory-structure constraint (hard requirement)
+The on-disk directory layout must remain **unchanged** at every layer; sub-agent
+events stay in their **own separate directory**, as they are today:
+- **Agent-server (origin):** `conversations/<parent_id>/subagents/<sub_id>/events/`
+  — untouched.
+- **App-server (sink):** forwarded sub-agent events are persisted into a matching
+  **separate** sub-directory keyed by the sub-conversation id — never merged into
+  the parent conversation's flat events directory.
+
+`parent_tool_use_id` is purely a **logical correlation tag** for transport and
+frontend nesting. It does **not** change where events are physically stored. The
+"single stream" the frontend renders is reconstructed by correlation, not by
+flat co-location on disk.
 
 ## 6. Context-isolation invariant
 
@@ -156,8 +188,12 @@ callback (publish-only, no `state.events.append`).
 - **Feature flag:** gate the forwarding behind configuration (default off for the
   upstream PR), naturally associated with `enable_sub_agents`, so it can be
   disabled without code changes.
-- **No storage migration:** the on-disk `subagents/<id>/events/` store is
-  unchanged; this design adds a forward, it does not relocate persistence.
+- **No storage migration / directory structure unchanged (hard constraint):**
+  the on-disk `subagents/<id>/events/` store is unchanged, and sub-agent events
+  continue to fall under their **own separate directory** at both the
+  agent-server and the app-server (see §5.6). This design adds a forward + a
+  correlation tag; it does **not** relocate persistence or flatten sub-agent
+  events into the parent's events directory.
 
 ## 8. Testing
 
@@ -180,16 +216,19 @@ callback (publish-only, no `state.events.append`).
 
 ### 8.3 App-server API tests (in repo — `tests/unit/app_server`)
 Contract-level tests against the FastAPI app (httpx `AsyncClient`):
-- **Inbound webhook:** `POST /webhook/events/{parent_id}` with a batch
-  containing events whose `parent_tool_use_id` is set → returns `200` and each
-  event is persisted via `save_event`.
-- **Events query:** `GET /api/v1/conversation/{parent_id}/events/search` returns
-  the sub-agent events **with** `parent_tool_use_id` populated in the JSON.
-- **Kind filter:** `GET …/events/search?kind__eq=...` still works for sub-agent
-  event kinds.
-- **Parent stream purity:** the parent stream contains exactly one `TaskAction`
-  + one `TaskObservation` for the delegation (sub-agent events are additional,
-  tagged entries — they never replace or duplicate the summary pair).
+- **Inbound webhook routing:** posting a batch containing events whose
+  `parent_tool_use_id` is set → returns `200`, and each is persisted into the
+  **separate sub-conversation directory** (§5.6), **not** the parent's flat
+  events store.
+- **Parent stream purity:** `GET /api/v1/conversation/{parent_id}/events/search`
+  returns **only** the parent's own events — exactly one `TaskAction` + one
+  `TaskObservation` for the delegation, and **no** sub-agent inner events.
+- **Sub-stream query:** the sub-stream read endpoint
+  (`GET /conversation/{parent_id}/subagents/{tool_call_id}/events`) returns the
+  sub-agent events, each carrying `parent_tool_use_id`.
+- **Directory assertion:** sub-agent events are written under
+  `…/<parent_id>/subagents/<sub_id>/events/` and the parent events directory is
+  unchanged.
 - **Analytics guard:** a batch of sub-agent events does NOT change conversation
   stats or trigger terminal-state detection in `on_event`.
 
@@ -213,10 +252,11 @@ Scenario — *"sub-agent inner steps stream live and nested":*
    "Sub-agent task" card.
 4. **Assert (final):** the card resolves to the `TaskObservation` summary +
    status, with the inner timeline retained.
-5. **Assert (isolation):** the parent/top-level stream shows only `TaskAction` +
-   `TaskObservation` for the delegation; querying
-   `GET /api/v1/conversation/{id}/events/search` shows sub-agent events tagged
-   with `parent_tool_use_id`.
+5. **Assert (isolation + dir):** the parent stream
+   (`GET /api/v1/conversation/{id}/events/search`) shows only `TaskAction` +
+   `TaskObservation`; the sub-agent events are served from the separate
+   sub-stream endpoint and stored under `…/<id>/subagents/<sub_id>/events/`
+   (separate directory preserved, §5.6).
 6. **Assert (flag off):** with the feature flag disabled, no sub-agent events
    reach the app-server and the UI behaves exactly as it does today.
 
