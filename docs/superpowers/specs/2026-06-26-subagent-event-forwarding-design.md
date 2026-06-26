@@ -161,16 +161,64 @@ callback (publish-only, no `state.events.append`).
 
 ## 8. Testing
 
-- **SDK unit:** the forwarding callback stamps `parent_tool_use_id`, invokes the
-  sink, and does NOT mutate the parent conversation's `state.events`.
-- **app-server unit:** `on_event` persists events carrying `parent_tool_use_id`;
-  `/events/search` returns them; analytics paths ignore them.
-- **frontend unit:** events are grouped/nested by matching `parent_tool_use_id`
-  to a `TaskAction.tool_call_id`; live append into the open card works.
-- **E2E (local runtime):** start a conversation, trigger a sub-agent, and verify
-  the inner steps appear nested and live under the Sub-agent task card at
-  `http://localhost:3001`, while the parent stream still shows only
-  `TaskAction` + `TaskObservation`.
+### 8.1 SDK unit (forked `openhands-sdk` / `openhands-tools`)
+- `Event.parent_tool_use_id` defaults to `None` and round-trips through
+  `model_dump(mode="json")` / `model_validate_json`.
+- The forwarding callback stamps `parent_tool_use_id` with the parent
+  `TaskAction.tool_call_id`, invokes the `sub_event_sink`, and does **NOT**
+  append to the parent conversation's `state.events` (context-isolation
+  invariant, §6).
+- With no `sub_event_sink` supplied (flag off), behavior is identical to today:
+  no forwarding, sub-agent events persist only to `subagents/<id>/events/`.
+- Sink raising an exception does not abort the sub-agent run nor alter the
+  returned `TaskObservation` (best-effort, §7).
+
+### 8.2 agent-server unit (forked `openhands-agent-server`)
+- The sink publishes to the parent `EventService._pub_sub` and the event reaches
+  the subscribed `WebhookSubscriber` queue, but the parent `state.events` count
+  is unchanged.
+
+### 8.3 App-server API tests (in repo — `tests/unit/app_server`)
+Contract-level tests against the FastAPI app (httpx `AsyncClient`):
+- **Inbound webhook:** `POST /webhook/events/{parent_id}` with a batch
+  containing events whose `parent_tool_use_id` is set → returns `200` and each
+  event is persisted via `save_event`.
+- **Events query:** `GET /api/v1/conversation/{parent_id}/events/search` returns
+  the sub-agent events **with** `parent_tool_use_id` populated in the JSON.
+- **Kind filter:** `GET …/events/search?kind__eq=...` still works for sub-agent
+  event kinds.
+- **Parent stream purity:** the parent stream contains exactly one `TaskAction`
+  + one `TaskObservation` for the delegation (sub-agent events are additional,
+  tagged entries — they never replace or duplicate the summary pair).
+- **Analytics guard:** a batch of sub-agent events does NOT change conversation
+  stats or trigger terminal-state detection in `on_event`.
+
+### 8.4 Frontend unit (`frontend/__tests__`)
+- The V1 event type carries `parent_tool_use_id`; the type guard accepts events
+  with and without it.
+- Grouping logic: events with `parent_tool_use_id === <TaskAction.tool_call_id>`
+  are rendered nested inside that Sub-agent task card and are **excluded** from
+  the top-level chat list.
+- Live append: a sub-agent event arriving over the WebSocket after the card is
+  rendered is appended into the open card.
+
+### 8.5 E2E (local runtime, `RUNTIME=local`)
+Scenario — *"sub-agent inner steps stream live and nested":*
+1. Start the stack via `./run-local.sh`; open `http://localhost:3001`.
+2. Start a conversation in a workspace containing files; send a prompt that
+   forces delegation (e.g. "Use the `code-explorer` sub-agent to list the repo
+   files and summarize each top-level folder").
+3. **Assert (live):** while the sub-agent runs, its `terminal`/`read`/etc.
+   action+observation events appear **nested and incrementally** under the
+   "Sub-agent task" card.
+4. **Assert (final):** the card resolves to the `TaskObservation` summary +
+   status, with the inner timeline retained.
+5. **Assert (isolation):** the parent/top-level stream shows only `TaskAction` +
+   `TaskObservation` for the delegation; querying
+   `GET /api/v1/conversation/{id}/events/search` shows sub-agent events tagged
+   with `parent_tool_use_id`.
+6. **Assert (flag off):** with the feature flag disabled, no sub-agent events
+   reach the app-server and the UI behaves exactly as it does today.
 
 ## 9. Out of scope
 
