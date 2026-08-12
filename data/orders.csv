@@ -1,0 +1,16 @@
+order_id,customer_id,product_id,quantity,unit_price,order_date,status,shipping_country
+O001,1,101,1,79.99,2023-03-01,delivered,US
+O002,2,105,2,49.99,2023-03-04,delivered,US
+O003,3,103,3,24.50,2023-03-07,cancelled,US
+O004,4,102,1,54.95,2023-03-10,delivered,US
+O005,5,106,1,39.00,2023-03-15,delivered,DE
+O006,1,109,1,34.99,2023-04-02,delivered,US
+O007,6,107,2,29.99,2023-04-08,shipped,NG
+O008,8,108,5,8.50,2023-04-12,delivered,GB
+O009,9,104,1,35.00,2023-04-20,delivered,IT
+O010,10,110,2,22.00,2023-05-01,delivered,DE
+O011,2,101,1,79.99,2023-05-10,shipped,US
+O012,4,107,1,29.99,2023-05-15,delivered,US
+O013,5,109,1,34.99,2023-05-22,delivered,DE
+O014,7,103,2,24.50,2023-06-01,cancelled,JP
+O015,9,105,1,49.99,2023-06-10,delivered,IT

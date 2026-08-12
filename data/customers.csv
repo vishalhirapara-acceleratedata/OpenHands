@@ -1,0 +1,11 @@
+customer_id,first_name,last_name,email,city,country,signup_date,is_active
+1,Alice,Morgan,alice.morgan@example.com,New York,US,2022-01-15,true
+2,Bob,Chen,bob.chen@example.com,San Francisco,US,2022-03-08,true
+3,Clara,Diaz,clara.diaz@example.com,Chicago,US,2022-04-22,false
+4,David,Kim,david.kim@example.com,Austin,US,2022-07-11,true
+5,Eva,Schmidt,eva.schmidt@example.com,Berlin,DE,2022-09-03,true
+6,Frank,Okafor,frank.okafor@example.com,Lagos,NG,2023-01-19,true
+7,Grace,Tanaka,grace.tanaka@example.com,Tokyo,JP,2023-02-28,false
+8,Henry,Patel,henry.patel@example.com,London,GB,2023-04-05,true
+9,Isla,Rossi,isla.rossi@example.com,Milan,IT,2023-06-17,true
+10,Jack,Müller,jack.muller@example.com,Munich,DE,2023-08-30,true
