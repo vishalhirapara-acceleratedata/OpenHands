@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: mart_orders
+    description: >
+      One row per order_id. Curated orders mart exposing order amount and date
+      for downstream consumption.
+    config:
+      materialized: table
+      contract:
+        enforced: true
+    columns:
+      - name: order_id
+        description: Primary key — unique order identifier.
+        data_type: integer
+        constraints:
+          - type: not_null
+          - type: unique
+      - name: amount
+        description: Order amount.
+        data_type: double
+      - name: order_date
+        description: Date the order was placed.
+        data_type: date

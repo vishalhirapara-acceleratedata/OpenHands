@@ -1,0 +1,15 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: Staging model for orders — 1:1 with source, typed columns.
+    columns:
+      - name: order_id
+        description: Primary key — unique order identifier.
+        tests:
+          - unique
+          - not_null
+      - name: amount
+        description: Order amount.
+      - name: order_date
+        description: Date the order was placed.
